@@ -2,6 +2,9 @@ use std::borrow::Cow;
 
 use arrow::io::ndjson;
 use jsonpath_lib::PathCompiled;
+use polars_core::utils::rayon::prelude::ParallelIterator;
+use polars_core::utils::NoNull;
+use polars_core::POOL;
 use serde_json::Value;
 
 use super::*;
@@ -72,9 +75,13 @@ pub trait Utf8JsonPathImpl: AsUtf8 {
             None => ca.json_infer(None)?,
         };
 
-        let iter = ca.into_iter().map(|x| x.unwrap_or("null"));
-        let array = ndjson::read::deserialize_iter(iter, dtype.to_arrow())
-            .map_err(|e| polars_err!(ComputeError: "error deserializing JSON: {}", e))?;
+        let array: Vec<_> = POOL.install(|| {
+             ca
+            .par_iter()
+            .map(|x| x.unwrap_or("null"))
+            .map(|x| ndjson::read::deserialize(&[x.to_string()], dtype.to_arrow()).unwrap()).collect()
+        });
+
         Series::try_from(("", array))
     }
 
