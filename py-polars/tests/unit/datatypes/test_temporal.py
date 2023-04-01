@@ -1398,7 +1398,16 @@ def test_asof_join() -> None:
     ].to_list() == [51.95, 51.95, None, None, 720.77, None, None, None]
 
 
-def test_temporal_dtypes_apply() -> None:
+@pytest.mark.parametrize(
+    ("skip_nulls", "expected_value"),
+    [
+        (True, None),
+        (False, datetime(2010, 9, 12)),
+    ],
+)
+def test_temporal_dtypes_apply(
+    skip_nulls: bool, expected_value: datetime | None
+) -> None:
     df = pl.DataFrame(
         {"timestamp": [1284286794000, None, 1234567890000]},
         schema=[("timestamp", pl.Datetime("ms"))],
@@ -1409,9 +1418,15 @@ def test_temporal_dtypes_apply() -> None:
         df.with_columns(
             [
                 # don't actually do any of this; native expressions are MUCH faster ;)
-                pl.col("timestamp").apply(lambda x: const_dtm).alias("const_dtm"),
-                pl.col("timestamp").apply(lambda x: x and x.date()).alias("date"),
-                pl.col("timestamp").apply(lambda x: x and x.time()).alias("time"),
+                pl.col("timestamp")
+                .apply(lambda x: const_dtm, skip_nulls=skip_nulls)
+                .alias("const_dtm"),
+                pl.col("timestamp")
+                .apply(lambda x: x and x.date(), skip_nulls=skip_nulls)
+                .alias("date"),
+                pl.col("timestamp")
+                .apply(lambda x: x and x.time(), skip_nulls=skip_nulls)
+                .alias("time"),
             ]
         ),
         pl.DataFrame(
@@ -1422,7 +1437,7 @@ def test_temporal_dtypes_apply() -> None:
                     date(2010, 9, 12),
                     time(10, 19, 54),
                 ),
-                (None, const_dtm, None, None),
+                (None, expected_value, None, None),
                 (
                     datetime(2009, 2, 13, 23, 31, 30),
                     datetime(2010, 9, 12, 0, 0),
@@ -1936,10 +1951,10 @@ def test_strptime_with_invalid_tz() -> None:
         pl.Series(["2020-01-01 03:00:00"]).str.strptime(pl.Datetime("us", "foo"))
     with pytest.raises(
         ComputeError,
-        match="cannot use strptime with both 'tz_aware=True' and tz-aware datetime",
+        match="cannot use strptime with both a tz-aware format and a tz-aware dtype",
     ):
         pl.Series(["2020-01-01 03:00:00+01:00"]).str.strptime(
-            pl.Datetime("us", "foo"), "%Y-%m-%d %H:%M:%S%z", tz_aware=True
+            pl.Datetime("us", "foo"), "%Y-%m-%d %H:%M:%S%z"
         )
     with pytest.raises(
         ComputeError,

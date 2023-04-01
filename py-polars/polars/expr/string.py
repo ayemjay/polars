@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from typing import TYPE_CHECKING
 
 from polars.datatypes import (
@@ -10,12 +11,14 @@ from polars.datatypes import (
     is_polars_dtype,
     py_type_to_dtype,
 )
+from polars.utils import no_default
 from polars.utils._parse_expr_input import expr_to_lit_or_expr
 from polars.utils._wrap import wrap_expr
 
 if TYPE_CHECKING:
     from polars.expr.expr import Expr
     from polars.type_aliases import PolarsDataType, PolarsTemporalType, TransferEncoding
+    from polars.utils import NoDefault
 
 
 class ExprStringNameSpace:
@@ -33,7 +36,7 @@ class ExprStringNameSpace:
         strict: bool = True,
         exact: bool = True,
         cache: bool = True,
-        tz_aware: bool = False,
+        tz_aware: bool | NoDefault = no_default,
         utc: bool = False,
     ) -> Expr:
         """
@@ -56,7 +59,11 @@ class ExprStringNameSpace:
             Use a cache of unique, converted dates to apply the datetime conversion.
         tz_aware
             Parse timezone aware datetimes. This may be automatically toggled by the
-            'fmt' given.
+            `fmt` given.
+
+            .. deprecated:: 0.16.17
+                This is now auto-inferred from the given `fmt`. You can safely drop
+                this argument, it will be removed in a future version.
         utc
             Parse timezone aware datetimes as UTC. This may be useful if you have data
             with mixed offsets.
@@ -113,6 +120,16 @@ class ExprStringNameSpace:
         """
         if not is_polars_dtype(datatype):  # pragma: no cover
             raise ValueError(f"expected: {DataType} got: {datatype}")
+
+        if tz_aware is no_default:
+            tz_aware = False
+        else:
+            warnings.warn(
+                "`tz_aware` is now auto-inferred from `fmt` and will be removed "
+                "in a future version. You can safely drop this argument.",
+                category=DeprecationWarning,
+                stacklevel=2,
+            )
 
         if datatype == Date:
             return wrap_expr(self._pyexpr.str_parse_date(fmt, strict, exact, cache))
@@ -521,7 +538,8 @@ class ExprStringNameSpace:
         Parameters
         ----------
         pattern
-            A valid regex pattern.
+            A regex pattern compatible with the `regex crate
+            <https://docs.rs/regex/latest/regex/>`_.
         literal
             Treat pattern as a literal string.
         strict
@@ -802,7 +820,8 @@ class ExprStringNameSpace:
         Parameters
         ----------
         pattern
-            A valid regex pattern
+            A regex pattern compatible with the `regex crate
+            <https://docs.rs/regex/latest/regex/>`_.
         group_index
             Index of the targeted capture group.
             Group 0 mean the whole pattern, first group begin at index 1
@@ -852,7 +871,8 @@ class ExprStringNameSpace:
         Parameters
         ----------
         pattern
-            A valid regex pattern
+            A regex pattern compatible with the `regex crate
+            <https://docs.rs/regex/latest/regex/>`_.
 
         Returns
         -------
@@ -888,7 +908,8 @@ class ExprStringNameSpace:
         Parameters
         ----------
         pattern
-            A valid regex pattern
+            A regex pattern compatible with the `regex crate
+            <https://docs.rs/regex/latest/regex/>`_.
 
         Returns
         -------
@@ -1095,7 +1116,8 @@ class ExprStringNameSpace:
         Parameters
         ----------
         pattern
-            Regex pattern.
+            A regex pattern compatible with the `regex crate
+            <https://docs.rs/regex/latest/regex/>`_.
         value
             Replacement string.
         literal
@@ -1139,7 +1161,8 @@ class ExprStringNameSpace:
         Parameters
         ----------
         pattern
-            Regex pattern.
+            A regex pattern compatible with the `regex crate
+            <https://docs.rs/regex/latest/regex/>`_.
         value
             Replacement string.
         literal

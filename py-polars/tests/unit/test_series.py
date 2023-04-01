@@ -20,13 +20,14 @@ from polars.datatypes import (
     Time,
     UInt32,
     UInt64,
+    Unknown,
 )
 from polars.exceptions import ShapeError
 from polars.testing import assert_frame_equal, assert_series_equal
 from polars.utils._construction import iterable_to_pyseries
 
 if TYPE_CHECKING:
-    from polars.type_aliases import EpochTimeUnit, TimeUnit
+    from polars.type_aliases import EpochTimeUnit, PolarsDataType, TimeUnit
 
 
 def test_cum_agg() -> None:
@@ -385,6 +386,9 @@ def test_power() -> None:
     with pytest.raises(pl.ComputeError):
         "hi" ** a
 
+    # Series.pow() method
+    assert_series_equal(a.pow(2), pl.Series([1.0, 4.0], dtype=Float64))
+
 
 def test_add_string() -> None:
     s = pl.Series(["hello", "weird"])
@@ -402,6 +406,25 @@ def test_append_extend() -> None:
     expected = pl.Series("a", [1, 2, 8, 9, None])
     assert_series_equal(a, expected)
     assert a.n_chunks() == 1
+
+
+@pytest.mark.parametrize(
+    ("data", "expected_dtype"),
+    [
+        (100, pl.Int64),
+        (8.5, pl.Float64),
+        ("서울특별시", pl.Utf8),
+        (date.today(), pl.Date),
+        (datetime.now(), pl.Datetime("us")),
+        (time(23, 59, 59), pl.Time),
+        (timedelta(hours=7, seconds=123), pl.Duration("us")),
+    ],
+)
+def test_unknown_dtype(data: Any, expected_dtype: PolarsDataType) -> None:
+    # if given 'Unknown', should be able to infer the correct dtype
+    s = pl.Series([data], dtype=Unknown)
+    assert s.dtype == expected_dtype
+    assert s.to_list() == [data]
 
 
 def test_various() -> None:
@@ -1238,6 +1261,11 @@ def test_mode() -> None:
 
     df = pl.DataFrame([s])
     assert df.select([pl.col("a").mode()])["a"].to_list() == [1]
+    assert (
+        pl.Series(["foo", "bar", "buz", "bar"], dtype=pl.Categorical).mode().item()
+        == "bar"
+    )
+    assert pl.Series([1.0, 2.0, 3.0, 2.0]).mode().item() == 2.0
 
 
 def test_rank() -> None:
@@ -1421,7 +1449,6 @@ def test_invalid_categorical() -> None:
     assert s.var() is None
     assert s.median() is None
     assert s.quantile(0.5) is None
-    assert s.mode().to_list() == [None]
 
 
 def test_bitwise() -> None:
@@ -2495,6 +2522,31 @@ def test_map_dict() -> None:
     assert_series_equal(
         s.map_dict(remap_int, default=pl.first()),
         pl.Series("s", [-1, 22, None, 44, -5]),
+    )
+
+    assert_series_equal(
+        s.cast(pl.Int16).map_dict(remap_int),
+        pl.Series("s", [None, 22, None, 44, None], dtype=pl.Int16),
+    )
+
+    assert_series_equal(
+        s.cast(pl.Int16).map_dict(remap_int, default=pl.first()),
+        pl.Series("s", [-1, 22, None, 44, -5], dtype=pl.Int16),
+    )
+
+    assert_series_equal(
+        s.cast(pl.Int16).map_dict(remap_int, default=pl.first(), dtype=pl.Float32),
+        pl.Series("s", [-1.0, 22.0, None, 44.0, -5.0], dtype=pl.Float32),
+    )
+
+    assert_series_equal(
+        s.cast(pl.Int16).map_dict(remap_int, default=9),
+        pl.Series("s", [9, 22, 9, 44, 9], dtype=pl.Int16),
+    )
+
+    assert_series_equal(
+        s.cast(pl.Int16).map_dict(remap_int, default=9, dtype=pl.Float32),
+        pl.Series("s", [9.0, 22.0, 9.0, 44.0, 9.0], dtype=pl.Float32),
     )
 
 

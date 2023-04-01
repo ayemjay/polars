@@ -23,4 +23,5 @@ node_modules/
 polars/vendor
 target/
 venv/
+.venv/
 .vim

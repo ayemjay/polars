@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import functools
 import re
@@ -48,6 +49,9 @@ from polars.datatypes import (
 from polars.dependencies import numpy as np
 from polars.dependencies import pyarrow as pa
 
+with contextlib.suppress(ImportError):  # Module not available when building docs
+    from polars.polars import dtype_str_repr as _dtype_str_repr
+
 if sys.version_info >= (3, 8):
     from typing import get_args
 else:
@@ -81,6 +85,59 @@ def cache(function: Callable[..., T]) -> T:
     # need this to satisfy mypy issue with "@property/@cache combination"
     # See: https://github.com/python/mypy/issues/5858
     return functools.lru_cache()(function)  # type: ignore[return-value]
+
+
+PY_STR_TO_DTYPE: SchemaDict = {
+    "float": Float64,
+    "int": Int64,
+    "str": Utf8,
+    "bool": Boolean,
+    "date": Date,
+    "datetime": Datetime("us"),
+    "timedelta": Duration("us"),
+    "time": Time,
+    "list": List,
+    "tuple": List,
+    "Decimal": Decimal,
+    "bytes": Binary,
+    "object": Object,
+    "NoneType": Null,
+}
+
+
+@functools.lru_cache(16)
+def map_py_type_to_dtype(python_dtype: PythonDataType | type[object]) -> PolarsDataType:
+    if python_dtype is float:
+        return Float64
+    if python_dtype is int:
+        return Int64
+    if python_dtype is str:
+        return Utf8
+    if python_dtype is bool:
+        return Boolean
+    if issubclass(python_dtype, datetime):
+        # `datetime` is a subclass of `date`,
+        # so need to check `datetime` first
+        return Datetime("us")
+    if issubclass(python_dtype, date):
+        return Date
+    if python_dtype is timedelta:
+        return Duration("us")
+    if python_dtype is time:
+        return Time
+    if python_dtype is list:
+        return List
+    if python_dtype is tuple:
+        return List
+    if python_dtype is PyDecimal:
+        return Decimal
+    if python_dtype is bytes:
+        return Binary
+    if python_dtype is object:
+        return Object
+    if python_dtype is None.__class__:
+        return Null
+    raise TypeError("Invalid type")
 
 
 def is_polars_dtype(data_type: Any, include_unknown: bool = False) -> bool:
@@ -142,31 +199,6 @@ class _DataTypeMappings:
             Duration: ctypes.c_int64,
             Time: ctypes.c_int64,
         }
-
-    @property
-    @cache
-    def PY_TYPE_TO_DTYPE(self) -> dict[PythonDataType | type[object], PolarsDataType]:
-        return {
-            float: Float64,
-            int: Int64,
-            str: Utf8,
-            bool: Boolean,
-            date: Date,
-            datetime: Datetime("us"),
-            timedelta: Duration("us"),
-            time: Time,
-            list: List,
-            tuple: List,
-            PyDecimal: Decimal,
-            bytes: Binary,
-            object: Object,
-            None.__class__: Null,
-        }
-
-    @property
-    @cache
-    def PY_STR_TO_DTYPE(self) -> SchemaDict:
-        return {str(tp.__name__): dtype for tp, dtype in self.PY_TYPE_TO_DTYPE.items()}
 
     @property
     @cache
@@ -255,6 +287,21 @@ class _DataTypeMappings:
             Null: pa.null(),
         }
 
+    @property
+    @cache
+    def REPR_TO_DTYPE(self) -> dict[str, PolarsDataType]:
+        def _dtype_str_repr_safe(o: Any) -> PolarsDataType | None:
+            try:
+                return _dtype_str_repr(o.base_type()).split("[")[0]
+            except ValueError:
+                return None
+
+        return {
+            _dtype_str_repr_safe(obj): obj  # type: ignore[misc]
+            for obj in globals().values()
+            if is_polars_dtype(obj) and _dtype_str_repr_safe(obj) is not None
+        }
+
 
 # Initialize once (poor man's singleton :)
 DataTypeMappings = _DataTypeMappings()
@@ -314,7 +361,7 @@ def py_type_to_dtype(
     if isinstance(data_type, ForwardRef):
         annotation = data_type.__forward_arg__
         data_type = (
-            DataTypeMappings.PY_STR_TO_DTYPE.get(
+            PY_STR_TO_DTYPE.get(
                 re.sub(r"(^None \|)|(\| None$)", "", annotation).strip(), data_type
             )
             if isinstance(annotation, str)  # type: ignore[redundant-expr]
@@ -330,8 +377,13 @@ def py_type_to_dtype(
         possible_types = [tp for tp in get_args(data_type) if tp is not NoneType]
         if len(possible_types) == 1:
             data_type = possible_types[0]
+
+    elif isinstance(data_type, str):
+        data_type = DataTypeMappings.REPR_TO_DTYPE.get(data_type, data_type)
+        if is_polars_dtype(data_type):
+            return data_type
     try:
-        return DataTypeMappings.PY_TYPE_TO_DTYPE[data_type]
+        return map_py_type_to_dtype(data_type)
     except (KeyError, TypeError):  # pragma: no cover
         if not raise_unmatched:
             return None
@@ -367,6 +419,26 @@ def dtype_to_arrow_type(dtype: PolarsDataType) -> pa.lib.DataType:
         raise ValueError(
             f"Cannot parse data type {dtype} into Arrow data type."
         ) from None
+
+
+def dtype_short_repr_to_dtype(dtype_string: str | None) -> PolarsDataType | None:
+    """Map a PolarsDataType short repr (eg: 'i64', 'list[str]') back into a dtype."""
+    if dtype_string is None:
+        return None
+    m = re.match(r"^(\w+)(?:\[(.+)\])?$", dtype_string)
+    if m is None:
+        return None
+
+    dtype_base, subtype = m.groups()
+    dtype = DataTypeMappings.REPR_TO_DTYPE.get(dtype_base)
+    if dtype and subtype:
+        # TODO: better-handle nested types (such as List,Struct)
+        subtype = (s.strip("""'" """) for s in subtype.replace("μs", "us").split(","))
+        try:
+            return dtype(*subtype)  # type: ignore[operator]
+        except ValueError:
+            pass
+    return dtype
 
 
 def supported_numpy_char_code(dtype_char: str) -> bool:

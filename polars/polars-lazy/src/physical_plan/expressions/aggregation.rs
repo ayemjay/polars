@@ -48,6 +48,7 @@ impl PhysicalExpr for AggregationExpr {
         let mut ac = self.input.evaluate_on_groups(df, groups, state)?;
         // don't change names by aggregations as is done in polars-core
         let keep_name = ac.series().name().to_string();
+        polars_ensure!(!matches!(ac.agg_state(), AggState::Literal(_)), ComputeError: "cannot aggregate a literal");
 
         macro_rules! check_null_prop {
             () => {
@@ -309,7 +310,7 @@ impl PartitionedAggregation for AggregationExpr {
                             _ => agg_s.cast(&DataType::Float64).unwrap(),
                         };
                         let mut count_s = series.agg_valid_count(groups);
-                        count_s.rename("count");
+                        count_s.rename("__POLARS_COUNT");
                         Ok(StructChunked::new(&new_name, &[agg_s, count_s])
                             .unwrap()
                             .into_series())
